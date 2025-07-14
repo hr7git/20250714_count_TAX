@@ -1,5 +1,3 @@
-# 클로드로 요청한 내용으로 01. 번 내용에서 (3) 병합부분만 수정요청하니 group by로 수정함
-
 import streamlit as st
 import pandas as pd
 import io
@@ -25,26 +23,29 @@ def process_ecount_file(df: pd.DataFrame) -> pd.DataFrame:
     # 2. 공급가액이 0보다 큰 데이터만 선택
     df = df[df['price'] > 0]
     
-    # 3. 개선된 데이터 병합
+    # 3. 개선된 데이터 병합 (원본 로직 기반)
     # 기준이 되는 키 컬럼 정의
     key_columns = ['code', 'Date', 'TaxNo_Send', 'J1', 'Title_send', 'Name_send',
                    'Addr_send', 'sub1', 'sub2', 'Email_send',
                    'TaxNo_get', 'J2', 'TaxTitle_get', 'Name_get',
                    'Addr_get', 'type1', 'type2', 'Email_get', 'Email2_get', 'note_Sum']
 
-    # 품목 매핑 정의 (우선순위 순으로 정렬)
-    item_mapping = {
-        '임대료': 1,
-        '관리비': 2,
-        '전기료': 3,
-        '주차료': 4
-    }
+    # 하나은행 데이터 별도 처리 (원본 방식)
+    df_Hana = df[df['TaxNo_get'] == '2298500670'].copy()
+    df_main = df[df['TaxNo_get'] != '2298500670'].copy()
+
+    # 품목별 DataFrame 생성 (원본 방식 유지)
+    df1 = df_main[df_main['item'] == '임대료'].copy()
+    df2 = df_main[df_main['item'] == '관리비'].copy()
+    df3 = df_main[df_main['item'] == '전기료'].copy()
+    df4 = df_main[df_main['item'] == '주차료'].copy()
     
-    # 하나은행 데이터를 임대료로 처리
-    df.loc[df['TaxNo_get'] == '2298500670', 'item'] = '임대료'
-    
-    # 품목별로 데이터를 그룹화하고 피벗 테이블 생성
-    merged_df = create_pivot_table(df, key_columns, item_mapping)
+    # 하나은행 데이터를 임대료에 추가 (원본 방식)
+    if not df_Hana.empty:
+        df1 = pd.concat([df_Hana, df1], ignore_index=True)
+
+    # 개선된 병합 로직
+    merged_df = merge_item_dataframes(df1, df2, df3, df4, key_columns)
     
     # 4. 합계 계산
     merged_df = calculate_totals(merged_df)
@@ -55,51 +56,49 @@ def process_ecount_file(df: pd.DataFrame) -> pd.DataFrame:
     return final_df
 
 
-def create_pivot_table(df: pd.DataFrame, key_columns: List[str], item_mapping: Dict[str, int]) -> pd.DataFrame:
+def merge_item_dataframes(df1: pd.DataFrame, df2: pd.DataFrame, df3: pd.DataFrame, df4: pd.DataFrame, key_columns: List[str]) -> pd.DataFrame:
     """
-    품목별 데이터를 피벗 테이블로 변환하여 병합합니다.
+    품목별 데이터프레임을 병합합니다.
     """
-    # 필요한 데이터 컬럼
+    # 각 데이터프레임이 비어있지 않은 경우만 처리
+    dfs = [df1, df2, df3, df4]
+    non_empty_dfs = [df for df in dfs if not df.empty]
+    
+    if not non_empty_dfs:
+        # 모든 데이터프레임이 비어있으면 빈 DataFrame 반환
+        return pd.DataFrame()
+    
+    # 첫 번째 비어있지 않은 DataFrame을 기준으로 시작
+    merged_df = non_empty_dfs[0][key_columns + ['day', 'item', 'standard', 'quantity', 'unit_price', 'price', 'VAT', 'note']].copy()
+    
+    # 컬럼명에 suffix 추가
     value_columns = ['day', 'item', 'standard', 'quantity', 'unit_price', 'price', 'VAT', 'note']
+    rename_dict = {col: f'{col}_1' for col in value_columns}
+    merged_df = merged_df.rename(columns=rename_dict)
     
-    # 매핑에 있는 품목만 필터링
-    df_filtered = df[df['item'].isin(item_mapping.keys())].copy()
+    # 나머지 데이터프레임들과 순차적으로 병합
+    for i, df in enumerate([df2, df3, df4], 2):
+        if not df.empty:
+            # 필요한 컬럼만 선택
+            df_selected = df[key_columns + value_columns].copy()
+            
+            # 컬럼명에 suffix 추가
+            rename_dict = {col: f'{col}_{i}' for col in value_columns}
+            df_renamed = df_selected.rename(columns=rename_dict)
+            
+            # 외부 조인으로 병합
+            merged_df = pd.merge(merged_df, df_renamed, on=key_columns, how='outer')
     
-    # 품목별 우선순위 추가
-    df_filtered['item_priority'] = df_filtered['item'].map(item_mapping)
-    
-    # 키 컬럼과 값 컬럼 결합
-    all_columns = key_columns + value_columns + ['item_priority']
-    df_work = df_filtered[all_columns].copy()
-    
-    # 각 키 조합별로 품목들을 하나의 행으로 병합
-    result_rows = []
-    
-    for key_values, group in df_work.groupby(key_columns):
-        # 키 컬럼들의 기본값 설정
-        row_dict = dict(zip(key_columns, key_values))
-        
-        # 우선순위 순으로 정렬
-        group_sorted = group.sort_values('item_priority')
-        
-        # 각 품목별 데이터를 suffix와 함께 저장
-        for idx, (_, item_row) in enumerate(group_sorted.iterrows(), 1):
-            if idx <= 4:  # 최대 4개 품목까지만 처리
-                for col in value_columns:
-                    if col in item_row:
-                        row_dict[f'{col}_{idx}'] = item_row[col]
-                    else:
-                        row_dict[f'{col}_{idx}'] = ''
-        
-        result_rows.append(row_dict)
-    
-    return pd.DataFrame(result_rows)
+    return merged_df
 
 
 def calculate_totals(df: pd.DataFrame) -> pd.DataFrame:
     """
     품목별 가격과 VAT의 합계를 계산합니다.
     """
+    if df.empty:
+        return df
+        
     price_cols = [f'price_{i}' for i in range(1, 5)]
     vat_cols = [f'VAT_{i}' for i in range(1, 5)]
     
@@ -123,6 +122,9 @@ def format_final_output(df: pd.DataFrame) -> pd.DataFrame:
     """
     홈택스 양식에 맞게 최종 출력 포맷을 설정합니다.
     """
+    if df.empty:
+        return pd.DataFrame()
+        
     # 최종 컬럼 순서 정의
     final_columns = [
         'code', 'Date', 'TaxNo_Send', 'J1', 'Title_send', 'Name_send', 'Addr_send', 
@@ -190,23 +192,26 @@ if uploaded_file:
                 processed_df = process_ecount_file(df_original.copy())
 
                 st.subheader("✅ 변환 결과 미리보기")
-                st.dataframe(processed_df)
+                if processed_df.empty:
+                    st.warning("변환된 데이터가 없습니다. 원본 데이터를 확인해주세요.")
+                else:
+                    st.dataframe(processed_df)
 
-                # 엑셀 파일 다운로드를 위해 인메모리 버퍼에 저장
-                output = io.BytesIO()
-                # 홈택스 양식에 맞게 5행 아래부터 데이터를 작성
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    processed_df.to_excel(writer, sheet_name='sale1', index=False, startrow=5)
-                
-                excel_data = output.getvalue()
+                    # 엑셀 파일 다운로드를 위해 인메모리 버퍼에 저장
+                    output = io.BytesIO()
+                    # 홈택스 양식에 맞게 5행 아래부터 데이터를 작성
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        processed_df.to_excel(writer, sheet_name='sale1', index=False, startrow=5)
+                    
+                    excel_data = output.getvalue()
 
-                st.download_button(
-                    label="📥 'tax_upload.xlsx' 파일 다운로드",
-                    data=excel_data,
-                    file_name="tax_upload.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+                    st.download_button(
+                        label="📥 'tax_upload.xlsx' 파일 다운로드",
+                        data=excel_data,
+                        file_name="tax_upload.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
 
     except Exception as e:
         st.error(f"파일을 처리하는 중 오류가 발생했습니다: {e}")
