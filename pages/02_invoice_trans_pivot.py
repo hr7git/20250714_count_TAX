@@ -1,3 +1,5 @@
+#  01_inove_transformer.py 를  3번 병합분을  gemini 로 수정요청하니
+#  merge 대신에 pivot 으로 바꾸어주었음 but 에러발생해서  claude 로 새로 요청함.
 import streamlit as st
 import pandas as pd
 import io
