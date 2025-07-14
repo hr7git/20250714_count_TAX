@@ -52,7 +52,7 @@ def process_ecount_file(df: pd.DataFrame) -> pd.DataFrame:
     price_cols = ['price_1', 'price_2', 'price_3', 'price_4']
     vat_cols = ['VAT_1', 'VAT_2', 'VAT_3', 'VAT_4']
     
-    # DataFrame에 해당 열이 없을 경우 생성
+    # DataFrame에 해당 열이 없을 경우 0으로 생성
     for col in price_cols + vat_cols:
         if col not in merged_df.columns:
             merged_df[col] = 0
@@ -110,14 +110,19 @@ uploaded_file = st.file_uploader("📂 이카운트 엑셀 파일을 업로드�
 if uploaded_file:
     st.success(f"파일이 성공적으로 업로드되었습니다: **{uploaded_file.name}**")
     
-    if st.button("🚀 변환 실행", use_container_width=True):
-        try:
-            # 엑셀 파일 로드 (양식에 맞게 첫 행은 건너뛰고, 마지막 2개 행은 제외)
-            df_original = pd.read_excel(uploaded_file, skiprows=1, skipfooter=2, header=0)
-            
+    try:
+        # 엑셀 파일 로드 (양식에 맞게 첫 행은 건너뛰고, 마지막 2개 행은 제외)
+        # 미리보기와 변환 모두에 사용하기 위해 먼저 로드합니다.
+        df_original = pd.read_excel(uploaded_file, skiprows=1, skipfooter=2, header=0)
+        
+        # 사용자가 원본 데이터를 확인할 수 있도록 expander 안에 미리보기 제공
+        with st.expander("📂 업로드한 원본 파일 미리보기"):
+            st.dataframe(df_original)
+
+        if st.button("🚀 변환 실행", use_container_width=True):
             with st.spinner('데이터를 변환하는 중입니다... 잠시만 기다려주세요.'):
-                # 데이터 변환 함수 호출
-                processed_df = process_ecount_file(df_original)
+                # 데이터 변환 함수 호출 (원본 보존을 위해 복사본 전달)
+                processed_df = process_ecount_file(df_original.copy())
 
                 st.subheader("✅ 변환 결과 미리보기")
                 st.dataframe(processed_df)
@@ -139,9 +144,9 @@ if uploaded_file:
                     use_container_width=True
                 )
 
-        except Exception as e:
-            st.error(f"오류가 발생했습니다: {e}")
-            st.warning("업로드한 파일이 '판매현황(거래처품목별-TAX1양식)'이 맞는지 확인해주세요.")
+    except Exception as e:
+        st.error(f"파일을 처리하는 중 오류가 발생했습니다: {e}")
+        st.warning("업로드한 파일이 '판매현황(거래처품목별-TAX1양식)'이 맞는지 확인해주세요.")
 
 else:
     st.info("파일을 업로드하면 변환을 시작할 수 있습니다.")
