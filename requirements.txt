@@ -1,10 +1,6 @@
-streamlit
-yfinance
-pandas
-plotly
-numpy
-scikit-learn 
-seaborn 
+streamlit 
+plotly 
+pandas 
+numpy 
 matplotlib 
-scipy
-
+seaborn
